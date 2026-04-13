@@ -10,7 +10,7 @@ st.markdown("Upload Pretest and Posttest CSV reports to analyze student growth i
 
 # --- Helper Functions ---
 def extract_grade(text):
-    # Attempts to extract grade level from Class, Program, or School name (e.g. "Grade 1" or "4th Grade")
+    # Attempts to extract grade level from Class, Program, or School name
     if pd.isna(text):
         return "Unknown"
     match = re.search(r'(?:Grade\s*([Kk0-9])|([Kk0-9])(?:th|nd|rd|st)\s*Grade)', str(text), re.IGNORECASE)
@@ -94,20 +94,57 @@ if pretest_file and posttest_file:
         merged_df['Subject'] = merged_df['ProgramInfo_post'].apply(extract_subject)
         merged_df['Grade Level'] = merged_df['ProgramInfo_post'].apply(extract_grade)
         
-        # In case the automated extraction misses the subject due to naming conventions, 
-        # let's allow users to override via the UI if it returns 'Other'.
-        
-      # --- Sidebar Filters ---
+        # --- Sidebar Filters ---
         st.sidebar.header("Filter Data")
         
         subject_filter = st.sidebar.multiselect(
             "Select Subject", 
             options=merged_df['Subject'].unique(), 
             default=merged_df['Subject'].unique()
-        ) # <-- Make sure this closing parenthesis is here!
+        )
         
         grade_filter = st.sidebar.multiselect(
             "Select Grade Level", 
             options=sorted(merged_df['Grade Level'].unique()), 
             default=sorted(merged_df['Grade Level'].unique())
-        ) # <-- And make sure this one is here too!
+        )
+        
+        # Apply filters
+        filtered_df = merged_df[
+            (merged_df['Subject'].isin(subject_filter)) & 
+            (merged_df['Grade Level'].isin(grade_filter))
+        ]
+        
+        st.success(f"Data successfully merged! Analyzing {len(filtered_df)} student records.")
+        
+        # --- Navigation / View Selection ---
+        view_option = st.radio("Select View:", ("By Student", "By Teacher", "By Grade Level"), horizontal=True)
+        
+        st.divider()
+        
+        # --- 1. View By Student ---
+        if view_option == "By Student":
+            st.subheader("Student Growth")
+            teacher_filter = st.selectbox("Optional: Filter by Teacher", ["All"] + list(filtered_df['Teacher'].unique()))
+            
+            student_view = filtered_df.copy()
+            if teacher_filter != "All":
+                student_view = student_view[student_view['Teacher'] == teacher_filter]
+                
+            display_cols = ['Student Name', 'Grade Level', 'Subject', 'Teacher', '% Score_pre', '% Score_post', 'Growth (%)']
+            st.dataframe(student_view[display_cols].style.background_gradient(subset=['Growth (%)'], cmap='RdYlGn').format({'% Score_pre': "{:.1f}", '% Score_post': "{:.1f}", 'Growth (%)': "{:.1f}"}))
+            
+            # Chart
+            if not student_view.empty:
+                fig = px.bar(student_view, x='Student Name', y='Growth (%)', color='Growth (%)', 
+                             color_continuous_scale='RdYlGn', title="Growth Percentage per Student")
+                st.plotly_chart(fig, use_container_width=True)
+
+        # --- 2. View By Teacher ---
+        elif view_option == "By Teacher":
+            st.subheader("Average Growth by Teacher")
+            
+            if not filtered_df.empty:
+                teacher_agg = filtered_df.groupby('Teacher').agg({
+                    '% Score_pre': 'mean',
+                    '%

@@ -97,15 +97,17 @@ if pretest_file and posttest_file:
         # In case the automated extraction misses the subject due to naming conventions, 
         # let's allow users to override via the UI if it returns 'Other'.
         
-        # --- Sidebar Filters ---
+      # --- Sidebar Filters ---
         st.sidebar.header("Filter Data")
         
         subject_filter = st.sidebar.multiselect(
             "Select Subject", 
             options=merged_df['Subject'].unique(), 
             default=merged_df['Subject'].unique()
-        )
+        ) # <-- Make sure this closing parenthesis is here!
         
         grade_filter = st.sidebar.multiselect(
             "Select Grade Level", 
-            options=
+            options=sorted(merged_df['Grade Level'].unique()), 
+            default=sorted(merged_df['Grade Level'].unique())
+        ) # <-- And make sure this one is here too!

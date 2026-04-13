@@ -1,158 +1,164 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import re
 
-# --- Configure Page ---
-st.set_page_config(page_title="Student Growth Analysis", layout="wide")
-st.title("📊 Student Growth Analysis Tool")
-st.markdown("Upload Pretest and Posttest CSV reports to analyze student growth in Math and Reading.")
+st.set_page_config(page_title="Student Intervention Generator", layout="centered")
+st.title("📊 Student Intervention Report Generator")
+st.write("Upload your student test results below. The system will automatically detect the subject and grade level to generate your targeted intervention list.")
 
-# --- Helper Functions ---
-def extract_grade(program_name):
-    # Attempts to extract grade level from the Program or Assessment name (e.g. "Grade 1")
-    if pd.isna(program_name):
-        return "Unknown"
-    match = re.search(r'Grade\s*([Kk0-9])', str(program_name), re.IGNORECASE)
-    if match:
-        grade = match.group(1).upper()
-        return "K" if grade == "K" else f"Grade {grade}"
-    return "Unknown"
+@st.cache_data
+def load_item_analysis(filename):
+    df = pd.read_csv(filename)
+    df.columns = df.columns.str.strip()
+    
+    if 'Question_ID' not in df.columns:
+        df = pd.read_csv(filename, skiprows=1)
+        df.columns = df.columns.str.strip()
+        
+    return df
 
-def extract_subject(program_name):
-    # Simplistic subject check based on keywords in Program
-    program_lower = str(program_name).lower()
-    if 'math' in program_lower:
-        return 'Math'
-    elif 'reading' in program_lower or 'literacy' in program_lower:
-        return 'Reading'
-    return 'Other'
+grade_names = {
+    "K": "Kindergarten", "1": "1st Grade", "2": "2nd Grade", "3": "3rd Grade",
+    "4": "4th Grade", "5": "5th Grade", "6": "6th Grade", "7": "7th Grade",
+    "8": "8th Grade", "9": "9th Grade"
+}
 
-# --- File Uploaders ---
+def detect_subject_and_grade(df, filename):
+    subject, grade = "math", "K" # Defaults
+    
+    filename_lower = filename.lower()
+    if 'reading' in filename_lower:
+        subject = "reading"
+    elif 'math' in filename_lower:
+        subject = "math"
+        
+    if 'Class' in df.columns:
+        classes = df['Class'].dropna().astype(str).unique()
+        for c in classes:
+            match = re.search(r'([K1-9])(st|nd|rd|th)?\s*Grade', c, re.IGNORECASE)
+            if match:
+                return subject, match.group(1).upper()
+
+    if 'Name' in df.columns:
+        first_col = df.iloc[:, 0].dropna().astype(str)
+        for val in first_col:
+            val = val.strip()
+            match_reading = re.match(r"^(RL|RI|RF|W|SL)\.?([K1-9])", val, re.IGNORECASE)
+            if match_reading:
+                return "reading", match_reading.group(2).upper()
+                
+            match_math = re.match(r"^([K1-9])\.(OA|NC|MD)", val, re.IGNORECASE)
+            if match_math:
+                return "math", match_math.group(1).upper()
+
+    return subject, grade
+
+# --- NEW: Reusable Data Cleaning Function ---
+# This ensures both Pre and Post tests get the exact same column names
+def clean_student_data(raw_df):
+    if 'Question #' in raw_df.columns and 'Student' in raw_df.columns:
+        # Process the NEW Format (Long)
+        df = raw_df[['Student', 'Question #', 'Raw Score']].copy()
+        df = df.rename(columns={'Student': 'Student_Name', 'Question #': 'Question_ID', 'Raw Score': 'Score'})
+        df['Question_ID'] = 'Q' + df['Question_ID'].astype(str)
+        df['Score'] = pd.to_numeric(df['Score'], errors='coerce').fillna(0)
+        return df
+    else:
+        # Process the OLD Format (Wide)
+        q_cols = [col for col in raw_df.columns if col.startswith('Q') and col[1:].isdigit()]
+        columns_to_keep = ['Name'] + q_cols
+        
+        df = raw_df[columns_to_keep].dropna(subset=['Name', 'Q1'])
+        df = df[~df['Name'].str.contains('Total|Name|Class|Assignment|Standard', na=False, case=False)]
+        df = df.rename(columns={'Name': 'Student_Name'})
+        
+        df = pd.melt(df, id_vars=['Student_Name'], value_vars=q_cols, var_name='Question_ID', value_name='Score')
+        
+        def parse_score(score_str):
+            try:
+                if '/' in str(score_str):
+                    achieved, total = map(float, str(score_str).split('/'))
+                    return 1 if achieved == total else 0
+                else:
+                    return float(score_str)
+            except:
+                return score_str
+                
+        df['Score'] = df['Score'].apply(parse_score)
+        return df
+
+# Create TWO file uploaders side-by-side
 col1, col2 = st.columns(2)
 with col1:
-    pretest_file = st.file_uploader("Upload Pretest Report (CSV)", type=['csv'])
+    pre_file = st.file_uploader("1. Upload Pretest (CSV)", type="csv")
 with col2:
-    posttest_file = st.file_uploader("Upload Posttest Report (CSV)", type=['csv'])
+    post_file = st.file_uploader("2. Upload Posttest (CSV)", type="csv")
 
-if pretest_file and posttest_file:
-    # Load data
-    pre_df = pd.read_csv(pretest_file)
-    post_df = pd.read_csv(posttest_file)
+if pre_file and post_file:
+    raw_pre_df = pd.read_csv(pre_file)
+    raw_post_df = pd.read_csv(post_file)
     
-    # Standardize column names (strip whitespace)
-    pre_df.columns = pre_df.columns.str.strip()
-    post_df.columns = post_df.columns.str.strip()
-
-    # We need a primary key to merge on, 'Student ID' is perfect.
-    # We will keep suffixes _pre and _post for overlapping columns.
-    merged_df = pd.merge(
-        pre_df, 
-        post_df, 
-        on=['Student ID', 'Student Name', 'Teacher', 'School', 'Class'], 
-        suffixes=('_pre', '_post')
-    )
+    # Auto-Detect from the Posttest file
+    detected_subject, detected_grade = detect_subject_and_grade(raw_post_df, post_file.name)
+    pretty_grade = grade_names.get(detected_grade, f"Grade {detected_grade}")
     
-    if merged_df.empty:
-        st.error("No matching students found between the Pretest and Posttest files based on Student ID.")
-    else:
-        # --- Data Processing ---
-        # Calculate Growth
-        merged_df['Growth (%)'] = merged_df['% Score_post'] - merged_df['% Score_pre']
+    st.success(f"Files uploaded! Auto-detected **{pretty_grade} {detected_subject.capitalize()}**. Generating report...")
+    
+    file_to_load = f"{detected_subject}_item_analysis_{detected_grade}.csv"
+    
+    try:
+        item_df = load_item_analysis(file_to_load)
+        item_df['Question_ID'] = 'Q' + item_df['Question_ID'].astype(str)
         
-        # Extract Subject and Grade based on Posttest program (or pretest)
-        merged_df['Subject'] = merged_df['Program_post'].apply(extract_subject)
-        merged_df['Grade Level'] = merged_df['Program_post'].apply(extract_grade)
+        # 1. Clean BOTH datasets using the new unified function
+        clean_pre_df = clean_student_data(raw_pre_df)
+        clean_post_df = clean_student_data(raw_post_df)
         
-        # --- Sidebar Filters ---
-        st.sidebar.header("Filter Data")
-        
-        subject_filter = st.sidebar.multiselect(
-            "Select Subject", 
-            options=merged_df['Subject'].unique(), 
-            default=merged_df['Subject'].unique()
+        # 2. Merge Pretest and Posttest safely
+        # Now they both securely have 'Student_Name' and 'Question_ID' columns!
+        merged_student_df = pd.merge(
+            clean_pre_df, 
+            clean_post_df, 
+            on=['Student_Name', 'Question_ID'], 
+            suffixes=('_pre', '_post')
         )
         
-        grade_filter = st.sidebar.multiselect(
-            "Select Grade Level", 
-            options=sorted(merged_df['Grade Level'].unique()), 
-            default=sorted(merged_df['Grade Level'].unique())
-        )
+        # 3. Add the Item Analysis Key to the merged data
+        combined_data = pd.merge(merged_student_df, item_df, on="Question_ID")
         
-        # Apply filters
-        filtered_df = merged_df[
-            (merged_df['Subject'].isin(subject_filter)) & 
-            (merged_df['Grade Level'].isin(grade_filter))
-        ]
+        # 4. Filter for students who still missed the question on the POSTTEST
+        missed_questions = combined_data[combined_data['Score_post'] == 0].copy()
         
-        st.success(f"Data successfully merged! Analyzing {len(filtered_df)} student records.")
+        missed_questions['Lesson_Number'] = missed_questions['Lesson_Number'].astype(str).str.split(',')
+        missed_questions = missed_questions.explode('Lesson_Number')
+        missed_questions['Lesson_Number'] = missed_questions['Lesson_Number'].str.strip()
         
-        # --- Navigation / View Selection ---
-        view_option = st.radio("Select View:", ("By Student", "By Teacher", "By Grade Level"), horizontal=True)
+        missed_questions['Lesson_Number'] = pd.to_numeric(missed_questions['Lesson_Number'], errors='coerce')
+        missed_questions = missed_questions.dropna(subset=['Lesson_Number'])
         
-        st.divider()
+        intervention_report = missed_questions.groupby('Lesson_Number')['Student_Name'].unique().apply(lambda x: ', '.join(sorted(x))).reset_index()
+        intervention_report = intervention_report.sort_values(by='Lesson_Number')
         
-        # --- 1. View By Student ---
-        if view_option == "By Student":
-            st.subheader("Student Growth")
-            teacher_filter = st.selectbox("Optional: Filter by Teacher", ["All"] + list(filtered_df['Teacher'].unique()))
+        intervention_report['Lesson_Number'] = intervention_report['Lesson_Number'].astype(int)
+        intervention_report.columns = ['Lesson Number', 'Students Needing Support']
+        
+        st.subheader("Post-Test Intervention Report")
+        st.write("These students answered incorrectly on the **Posttest** and need targeted instruction for these lessons:")
+        
+        if intervention_report.empty:
+            st.info("Great news! No students missed questions tied to these lessons on the posttest.")
+        else:
+            st.dataframe(intervention_report, use_container_width=True, hide_index=True)
             
-            student_view = filtered_df.copy()
-            if teacher_filter != "All":
-                student_view = student_view[student_view['Teacher'] == teacher_filter]
-                
-            display_cols = ['Student Name', 'Student ID', 'Grade Level', 'Subject', 'Teacher', '% Score_pre', '% Score_post', 'Growth (%)']
-            st.dataframe(student_view[display_cols].style.background_gradient(subset=['Growth (%)'], cmap='RdYlGn'))
+            csv_export = intervention_report.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Report as CSV",
+                data=csv_export,
+                file_name=f"{detected_subject}_posttest_interventions_{pretty_grade.replace(' ', '_')}.csv",
+                mime="text/csv",
+            )
             
-            # Chart
-            if not student_view.empty:
-                fig = px.bar(student_view, x='Student Name', y='Growth (%)', color='Growth (%)', 
-                             color_continuous_scale='RdYlGn', title="Growth Percentage per Student")
-                st.plotly_chart(fig, use_container_width=True)
-
-        # --- 2. View By Teacher ---
-        elif view_option == "By Teacher":
-            st.subheader("Average Growth by Teacher")
-            
-            if not filtered_df.empty:
-                teacher_agg = filtered_df.groupby('Teacher').agg({
-                    '% Score_pre': 'mean',
-                    '% Score_post': 'mean',
-                    'Growth (%)': 'mean',
-                    'Student ID': 'count'
-                }).reset_index().rename(columns={'Student ID': 'Student Count'})
-                
-                # Round numbers
-                teacher_agg = teacher_agg.round(2)
-                
-                st.dataframe(teacher_agg.style.background_gradient(subset=['Growth (%)'], cmap='RdYlGn'))
-                
-                # Chart
-                fig = px.bar(teacher_agg, x='Teacher', y='Growth (%)', color='Growth (%)',
-                             color_continuous_scale='RdYlGn', title="Average Growth by Teacher")
-                st.plotly_chart(fig, use_container_width=True)
-
-        # --- 3. View By Grade Level ---
-        elif view_option == "By Grade Level":
-            st.subheader("Average Growth by Grade Level")
-            
-            if not filtered_df.empty:
-                grade_agg = filtered_df.groupby(['Grade Level', 'Subject']).agg({
-                    '% Score_pre': 'mean',
-                    '% Score_post': 'mean',
-                    'Growth (%)': 'mean',
-                    'Student ID': 'count'
-                }).reset_index().rename(columns={'Student ID': 'Student Count'})
-                
-                # Round numbers
-                grade_agg = grade_agg.round(2)
-                
-                st.dataframe(grade_agg.style.background_gradient(subset=['Growth (%)'], cmap='RdYlGn'))
-                
-                # Chart
-                fig = px.bar(grade_agg, x='Grade Level', y='Growth (%)', color='Subject', barmode='group',
-                             title="Average Growth by Grade Level & Subject")
-                st.plotly_chart(fig, use_container_width=True)
-
-else:
-    st.info("Please upload both the Pretest and Posttest files from the sidebar to begin.")
+    except FileNotFoundError:
+        st.error(f"System Error: The master item analysis key for {pretty_grade} {detected_subject.capitalize()} ({file_to_load}) is missing. Please contact the administrator.")
+    except Exception as e:
+        st.error(f"Error processing files: {e}. Please ensure both files are standard testing exports.")

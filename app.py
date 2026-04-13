@@ -94,10 +94,21 @@ if pretest_file and posttest_file:
             (merged_df['Grade Level'].isin(grade_filter))
         ]
         
-        st.success(f"Data successfully merged! Analyzing {len(filtered_df)} student records.")
+        # --- Success Message & Export Button ---
+        col_success, col_export = st.columns([3, 1])
+        with col_success:
+            st.success(f"Data successfully merged! Analyzing {len(filtered_df)} student records.")
+        with col_export:
+            # Convert filtered dataframe to CSV format for download
+            csv_export = filtered_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Comparison Data (CSV)",
+                data=csv_export,
+                file_name='student_growth_comparison.csv',
+                mime='text/csv',
+            )
         
         # --- Shared Formatting Dictionary ---
-        # This prevents long-line errors when copy/pasting!
         num_format = {
             '% Score_pre': "{:.1f}", 
             '% Score_post': "{:.1f}", 
@@ -119,7 +130,6 @@ if pretest_file and posttest_file:
                 
             display_cols = ['Student Name', 'Grade Level', 'Subject', 'Teacher', '% Score_pre', '% Score_post', 'Growth (%)']
             
-            # Apply styling and formatting cleanly
             styled_student_df = student_view[display_cols].style.background_gradient(subset=['Growth (%)'], cmap='RdYlGn').format(num_format)
             st.dataframe(styled_student_df)
             

@@ -10,7 +10,6 @@ st.markdown("Upload Pretest and Posttest CSV reports to analyze student growth i
 
 # --- Helper Functions ---
 def extract_grade(text):
-    # Attempts to extract grade level from Class, Program, or School name
     if pd.isna(text):
         return "Unknown"
     match = re.search(r'(?:Grade\s*([Kk0-9])|([Kk0-9])(?:th|nd|rd|st)\s*Grade)', str(text), re.IGNORECASE)
@@ -21,7 +20,6 @@ def extract_grade(text):
     return "Unknown"
 
 def extract_subject(text):
-    # Simplistic subject check based on keywords
     text_lower = str(text).lower()
     if 'math' in text_lower:
         return 'Math'
@@ -33,23 +31,14 @@ def preprocess_data(df):
     """Formats the dataframe depending on which CSV version was uploaded."""
     df.columns = df.columns.str.strip()
     
-    # Handle the new format (Question-level rows with 'Test Raw Score')
     if 'Test Raw Score' in df.columns and 'Test Max Score' in df.columns:
-        # Standardize names to match the old format
         if 'Student Name' not in df.columns and 'Student' in df.columns:
             df = df.rename(columns={'Student': 'Student Name'})
             
-        # Deduplicate to get one row per student test submission
         df = df.drop_duplicates(subset=['Student Name', 'Submit Date', 'Test Raw Score', 'Test Max Score']).copy()
-        
-        # Calculate the % Score
         df['% Score'] = (df['Test Raw Score'] / df['Test Max Score']) * 100
-        
-        # Create a combined 'ProgramInfo' column to search for grade/subject context
         df['ProgramInfo'] = df['Class'].astype(str) + " " + df['School'].astype(str)
-        
     else:
-        # Handle the original format
         if 'Program' in df.columns:
             df['ProgramInfo'] = df['Program']
         else:
@@ -69,28 +58,19 @@ if pretest_file and posttest_file:
     pre_df = pd.read_csv(pretest_file)
     post_df = pd.read_csv(posttest_file)
     
-    # Preprocess (Deduplicate multiple question rows, map columns, calculate % Score)
+    # Preprocess
     pre_df = preprocess_data(pre_df)
     post_df = preprocess_data(post_df)
 
-    # Merge on Student Name, Teacher, and School since Student ID is missing in the new format
+    # Merge
     merge_cols = ['Student Name', 'Teacher', 'School']
-    
-    merged_df = pd.merge(
-        pre_df, 
-        post_df, 
-        on=merge_cols, 
-        suffixes=('_pre', '_post')
-    )
+    merged_df = pd.merge(pre_df, post_df, on=merge_cols, suffixes=('_pre', '_post'))
     
     if merged_df.empty:
         st.error("No matching students found between the Pretest and Posttest files based on Student Name and Teacher.")
     else:
-        # --- Data Processing ---
         # Calculate Growth
         merged_df['Growth (%)'] = merged_df['% Score_post'] - merged_df['% Score_pre']
-        
-        # Extract Subject and Grade based on contextual columns (Class/School/Program)
         merged_df['Subject'] = merged_df['ProgramInfo_post'].apply(extract_subject)
         merged_df['Grade Level'] = merged_df['ProgramInfo_post'].apply(extract_grade)
         
@@ -109,7 +89,6 @@ if pretest_file and posttest_file:
             default=sorted(merged_df['Grade Level'].unique())
         )
         
-        # Apply filters
         filtered_df = merged_df[
             (merged_df['Subject'].isin(subject_filter)) & 
             (merged_df['Grade Level'].isin(grade_filter))
@@ -117,9 +96,16 @@ if pretest_file and posttest_file:
         
         st.success(f"Data successfully merged! Analyzing {len(filtered_df)} student records.")
         
-        # --- Navigation / View Selection ---
-        view_option = st.radio("Select View:", ("By Student", "By Teacher", "By Grade Level"), horizontal=True)
+        # --- Shared Formatting Dictionary ---
+        # This prevents long-line errors when copy/pasting!
+        num_format = {
+            '% Score_pre': "{:.1f}", 
+            '% Score_post': "{:.1f}", 
+            'Growth (%)': "{:.1f}"
+        }
         
+        # --- Navigation ---
+        view_option = st.radio("Select View:", ("By Student", "By Teacher", "By Grade Level"), horizontal=True)
         st.divider()
         
         # --- 1. View By Student ---
@@ -132,9 +118,11 @@ if pretest_file and posttest_file:
                 student_view = student_view[student_view['Teacher'] == teacher_filter]
                 
             display_cols = ['Student Name', 'Grade Level', 'Subject', 'Teacher', '% Score_pre', '% Score_post', 'Growth (%)']
-            st.dataframe(student_view[display_cols].style.background_gradient(subset=['Growth (%)'], cmap='RdYlGn').format({'% Score_pre': "{:.1f}", '% Score_post': "{:.1f}", 'Growth (%)': "{:.1f}"}))
             
-            # Chart
+            # Apply styling and formatting cleanly
+            styled_student_df = student_view[display_cols].style.background_gradient(subset=['Growth (%)'], cmap='RdYlGn').format(num_format)
+            st.dataframe(styled_student_df)
+            
             if not student_view.empty:
                 fig = px.bar(student_view, x='Student Name', y='Growth (%)', color='Growth (%)', 
                              color_continuous_scale='RdYlGn', title="Growth Percentage per Student")
@@ -147,4 +135,36 @@ if pretest_file and posttest_file:
             if not filtered_df.empty:
                 teacher_agg = filtered_df.groupby('Teacher').agg({
                     '% Score_pre': 'mean',
-                    '%})
+                    '% Score_post': 'mean',
+                    'Growth (%)': 'mean',
+                    'Student Name': 'count'
+                }).reset_index().rename(columns={'Student Name': 'Student Count'})
+                
+                styled_teacher_df = teacher_agg.style.background_gradient(subset=['Growth (%)'], cmap='RdYlGn').format(num_format)
+                st.dataframe(styled_teacher_df)
+                
+                fig = px.bar(teacher_agg, x='Teacher', y='Growth (%)', color='Growth (%)',
+                             color_continuous_scale='RdYlGn', title="Average Growth by Teacher")
+                st.plotly_chart(fig, use_container_width=True)
+
+        # --- 3. View By Grade Level ---
+        elif view_option == "By Grade Level":
+            st.subheader("Average Growth by Grade Level")
+            
+            if not filtered_df.empty:
+                grade_agg = filtered_df.groupby(['Grade Level', 'Subject']).agg({
+                    '% Score_pre': 'mean',
+                    '% Score_post': 'mean',
+                    'Growth (%)': 'mean',
+                    'Student Name': 'count'
+                }).reset_index().rename(columns={'Student Name': 'Student Count'})
+                
+                styled_grade_df = grade_agg.style.background_gradient(subset=['Growth (%)'], cmap='RdYlGn').format(num_format)
+                st.dataframe(styled_grade_df)
+                
+                fig = px.bar(grade_agg, x='Grade Level', y='Growth (%)', color='Subject', barmode='group',
+                             title="Average Growth by Grade Level & Subject")
+                st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.info("Please upload both the Pretest and Posttest files from the main window to begin.")

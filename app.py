@@ -147,4 +147,4 @@ if pretest_file and posttest_file:
             if not filtered_df.empty:
                 teacher_agg = filtered_df.groupby('Teacher').agg({
                     '% Score_pre': 'mean',
-                    '%
+                    '%})

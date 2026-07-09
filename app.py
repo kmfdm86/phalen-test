@@ -250,4 +250,64 @@ if uploaded_file:
                             '% Score_post': 'mean',
                             'Growth (%)': 'mean',
                             'Student Name': 'count'
-                        }).reset_index().rename(columns={'Student Name': '
+                        }).reset_index().rename(columns={'Student Name': 'Student Count'})
+                        
+                        teacher_agg['Growth Category'] = teacher_agg['Growth (%)'].apply(categorize_growth)
+                        styled_teacher_df = teacher_agg.drop(columns=['Growth Category']).style.apply(style_growth_col, subset=['Growth (%)']).format(num_format)
+                        st.dataframe(styled_teacher_df, use_container_width=True)
+                        
+                        fig = px.bar(teacher_agg, x='Teacher', y='Growth (%)', color='Growth Category',
+                                     color_discrete_map=chart_color_map, 
+                                     category_orders={"Growth Category": category_order},
+                                     title="Average Growth by Teacher",
+                                     hover_data=['School', 'Student Count'])
+                        st.plotly_chart(fig, use_container_width=True)
+
+                # --- 3. View By Grade Level ---
+                elif view_option == "By Grade Level":
+                    st.subheader("Average Growth by Grade Level")
+                    
+                    if not filtered_df.empty:
+                        grade_agg = filtered_df.groupby(['Grade Level', 'Subject']).agg({
+                            '% Score_pre': 'mean',
+                            '% Score_post': 'mean',
+                            'Growth (%)': 'mean',
+                            'Student Name': 'count'
+                        }).reset_index().rename(columns={'Student Name': 'Student Count'})
+                        
+                        grade_agg['Growth Category'] = grade_agg['Growth (%)'].apply(categorize_growth)
+                        styled_grade_df = grade_agg.drop(columns=['Growth Category']).style.apply(style_growth_col, subset=['Growth (%)']).format(num_format)
+                        st.dataframe(styled_grade_df, use_container_width=True)
+                        
+                        fig = px.bar(grade_agg, x='Grade Level', y='Growth (%)', color='Growth Category', barmode='group',
+                                     color_discrete_map=chart_color_map, 
+                                     category_orders={"Growth Category": category_order},
+                                     title="Average Growth by Grade Level & Subject",
+                                     hover_data=['Student Count'])
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                # --- 4. View By School ---
+                elif view_option == "By School":
+                    st.subheader("Average Growth by School")
+                    
+                    if not filtered_df.empty:
+                        school_agg = filtered_df.groupby('School').agg({
+                            '% Score_pre': 'mean',
+                            '% Score_post': 'mean',
+                            'Growth (%)': 'mean',
+                            'Student Name': 'count'
+                        }).reset_index().rename(columns={'Student Name': 'Student Count'})
+                        
+                        school_agg['Growth Category'] = school_agg['Growth (%)'].apply(categorize_growth)
+                        styled_school_df = school_agg.drop(columns=['Growth Category']).style.apply(style_growth_col, subset=['Growth (%)']).format(num_format)
+                        st.dataframe(styled_school_df, use_container_width=True)
+                        
+                        fig = px.bar(school_agg, x='School', y='Growth (%)', color='Growth Category',
+                                     color_discrete_map=chart_color_map, 
+                                     category_orders={"Growth Category": category_order},
+                                     title="Average Growth by School",
+                                     hover_data=['Student Count'])
+                        st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.info("Please upload your combined Assessment CSV file to begin.")

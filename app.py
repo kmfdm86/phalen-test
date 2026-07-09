@@ -6,7 +6,7 @@ import re
 # --- Configure Page ---
 st.set_page_config(page_title="Student Growth Analysis", layout="wide")
 st.title("📊 Student Growth Analysis Tool")
-st.markdown("Upload a single comprehensive CSV report. The tool will automatically pair students by looking for the words **'pretest'** and **'posttest'** in the Assessment column.")
+st.markdown("Upload a single comprehensive CSV report. The tool will pair students by looking for **'pretest'** and **'posttest'** in the Assessment column, while strictly matching **Math** to Math and **Reading** to Reading.")
 
 # --- Helper Functions ---
 def extract_grade(text):
@@ -18,14 +18,6 @@ def extract_grade(text):
         grade = grade.upper()
         return "K" if grade == "K" else f"Grade {grade}"
     return "Unknown"
-
-def extract_subject(text):
-    text_lower = str(text).lower()
-    if 'math' in text_lower:
-        return 'Math'
-    elif 'reading' in text_lower or 'literacy' in text_lower:
-        return 'Reading'
-    return 'Other'
 
 def categorize_growth(val):
     if pd.isna(val):
@@ -90,14 +82,35 @@ if uploaded_file:
         df['Submit Date'] = pd.to_datetime(df['Submit Date'], errors='coerce')
     df = df.dropna(subset=['% Score'])
     
-    # Extract Subject and Grade Level for grouping
-    df['Subject'] = df['ProgramInfo'].apply(extract_subject)
-    df['Grade Level'] = df['ProgramInfo'].apply(extract_grade)
-    
     # Enforce Assessment column check
     if 'Assessment' not in df.columns:
         st.error("The uploaded file must contain an 'Assessment' column to identify pretests and posttests.")
     else:
+        # Subject detection logic with fallback
+        def get_subject(row):
+            # 1. Check Assessment column first
+            assessment_str = str(row.get('Assessment', '')).lower()
+            if 'math' in assessment_str:
+                return 'Math'
+            elif 'reading' in assessment_str or 'literacy' in assessment_str:
+                return 'Reading'
+            
+            # 2. Fallback to ProgramInfo (which holds Program or Class context)
+            program_str = str(row.get('ProgramInfo', '')).lower()
+            if 'math' in program_str:
+                return 'Math'
+            elif 'reading' in program_str or 'literacy' in program_str:
+                return 'Reading'
+            
+            return 'Other'
+
+        # Apply the smart subject detection to every row
+        df['Subject'] = df.apply(get_subject, axis=1)
+        
+        # Grade Level extraction (combines both strings to find grade numbers)
+        search_text = df['Assessment'].astype(str) + " " + df['ProgramInfo'].astype(str)
+        df['Grade Level'] = search_text.apply(extract_grade)
+        
         # Find Pretests and Posttests using string matching
         pretest_mask = df['Assessment'].astype(str).str.contains('pretest', case=False, na=False)
         posttest_mask = df['Assessment'].astype(str).str.contains('posttest', case=False, na=False)
@@ -115,10 +128,10 @@ if uploaded_file:
                 pre_df_raw = pre_df_raw.sort_values('Submit Date', na_position='first')
                 post_df_raw = post_df_raw.sort_values('Submit Date', na_position='first')
             
-            # Group by our core identifiers
+            # Group by our core identifiers 
             group_cols = ['Student Name', 'Teacher', 'School', 'Subject', 'Grade Level']
             
-            # Use the latest record for each student
+            # Use the latest record for each student per subject
             pre_df = pre_df_raw.groupby(group_cols).last().reset_index()
             post_df = post_df_raw.groupby(group_cols).last().reset_index()
             
@@ -133,7 +146,7 @@ if uploaded_file:
             )
             
             if merged_df.empty:
-                st.warning("Found pretests and posttests in the file, but could not match any students who took both based on Name, Teacher, and School.")
+                st.warning("Found pretests and posttests, but could not match any students who took both for the same subject based on Name, Teacher, and School.")
             else:
                 # Calculate Growth & Categories
                 merged_df['Growth (%)'] = merged_df['% Score_post'] - merged_df['% Score_pre']
@@ -237,64 +250,4 @@ if uploaded_file:
                             '% Score_post': 'mean',
                             'Growth (%)': 'mean',
                             'Student Name': 'count'
-                        }).reset_index().rename(columns={'Student Name': 'Student Count'})
-                        
-                        teacher_agg['Growth Category'] = teacher_agg['Growth (%)'].apply(categorize_growth)
-                        styled_teacher_df = teacher_agg.drop(columns=['Growth Category']).style.apply(style_growth_col, subset=['Growth (%)']).format(num_format)
-                        st.dataframe(styled_teacher_df, use_container_width=True)
-                        
-                        fig = px.bar(teacher_agg, x='Teacher', y='Growth (%)', color='Growth Category',
-                                     color_discrete_map=chart_color_map, 
-                                     category_orders={"Growth Category": category_order},
-                                     title="Average Growth by Teacher",
-                                     hover_data=['School', 'Student Count'])
-                        st.plotly_chart(fig, use_container_width=True)
-
-                # --- 3. View By Grade Level ---
-                elif view_option == "By Grade Level":
-                    st.subheader("Average Growth by Grade Level")
-                    
-                    if not filtered_df.empty:
-                        grade_agg = filtered_df.groupby(['Grade Level', 'Subject']).agg({
-                            '% Score_pre': 'mean',
-                            '% Score_post': 'mean',
-                            'Growth (%)': 'mean',
-                            'Student Name': 'count'
-                        }).reset_index().rename(columns={'Student Name': 'Student Count'})
-                        
-                        grade_agg['Growth Category'] = grade_agg['Growth (%)'].apply(categorize_growth)
-                        styled_grade_df = grade_agg.drop(columns=['Growth Category']).style.apply(style_growth_col, subset=['Growth (%)']).format(num_format)
-                        st.dataframe(styled_grade_df, use_container_width=True)
-                        
-                        fig = px.bar(grade_agg, x='Grade Level', y='Growth (%)', color='Growth Category', barmode='group',
-                                     color_discrete_map=chart_color_map, 
-                                     category_orders={"Growth Category": category_order},
-                                     title="Average Growth by Grade Level & Subject",
-                                     hover_data=['Student Count'])
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                # --- 4. View By School ---
-                elif view_option == "By School":
-                    st.subheader("Average Growth by School")
-                    
-                    if not filtered_df.empty:
-                        school_agg = filtered_df.groupby('School').agg({
-                            '% Score_pre': 'mean',
-                            '% Score_post': 'mean',
-                            'Growth (%)': 'mean',
-                            'Student Name': 'count'
-                        }).reset_index().rename(columns={'Student Name': 'Student Count'})
-                        
-                        school_agg['Growth Category'] = school_agg['Growth (%)'].apply(categorize_growth)
-                        styled_school_df = school_agg.drop(columns=['Growth Category']).style.apply(style_growth_col, subset=['Growth (%)']).format(num_format)
-                        st.dataframe(styled_school_df, use_container_width=True)
-                        
-                        fig = px.bar(school_agg, x='School', y='Growth (%)', color='Growth Category',
-                                     color_discrete_map=chart_color_map, 
-                                     category_orders={"Growth Category": category_order},
-                                     title="Average Growth by School",
-                                     hover_data=['Student Count'])
-                        st.plotly_chart(fig, use_container_width=True)
-
-else:
-    st.info("Please upload your combined Assessment CSV file to begin.")
+                        }).reset_index().rename(columns={'Student Name': '

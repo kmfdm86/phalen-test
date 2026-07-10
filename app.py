@@ -10,13 +10,47 @@ st.markdown("Upload a single comprehensive CSV report. The tool will pair studen
 
 # --- Helper Functions ---
 def extract_grade_str(text):
+    """Smart text scanner to identify grade levels (K-12) from varied text formats."""
     if pd.isna(text):
         return "Unknown"
-    match = re.search(r'(?:Grade\s*([Kk0-9])|([Kk0-9])(?:th|nd|rd|st)\s*Grade)', str(text), re.IGNORECASE)
+    
+    text = str(text).lower()
+    
+    # 1. Explicitly check for Kindergarten variations
+    if 'kindergarten' in text or 'kinder' in text or 'grade k' in text or ' k ' in f" {text} ":
+        return "K"
+        
+    # 2. Check for spelled-out numbers paired with the word "grade"
+    word_to_num = {
+        'first': '1', 'one': '1',
+        'second': '2', 'two': '2',
+        'third': '3', 'three': '3',
+        'fourth': '4', 'four': '4',
+        'fifth': '5', 'five': '5',
+        'sixth': '6', 'six': '6',
+        'seventh': '7', 'seven': '7',
+        'eighth': '8', 'eight': '8',
+        'ninth': '9', 'nine': '9'
+    }
+    
+    for word, num in word_to_num.items():
+        # Matches "first grade", "grade one", etc.
+        if re.search(rf'\b{word}\s+grade\b', text) or re.search(rf'\bgrade\s+{word}\b', text):
+            return f"Grade {num}"
+            
+    # 3. Check for standard numeric representations (Grade 1, 1st Grade)
+    match = re.search(r'(?:grade\s*([k0-9])|([k0-9])(?:th|nd|rd|st)?\s*grade)', text)
     if match:
         grade = match.group(1) or match.group(2)
-        grade = grade.upper()
-        return "K" if grade == "K" else f"Grade {grade}"
+        if grade == 'k':
+            return "K"
+        return f"Grade {grade}"
+        
+    # 4. Fallback for standalone ordinals if the word "grade" is completely missing (e.g. "1st")
+    match_ordinal = re.search(r'\b([1-9])(?:th|nd|rd|st)\b', text)
+    if match_ordinal:
+        return f"Grade {match_ordinal.group(1)}"
+        
     return "Unknown"
 
 def categorize_growth(val):

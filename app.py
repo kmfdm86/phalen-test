@@ -6,10 +6,10 @@ import re
 # --- Configure Page ---
 st.set_page_config(page_title="Student Growth Analysis", layout="wide")
 st.title("📊 Student Growth Analysis Tool")
-st.markdown("Upload a single comprehensive CSV report. The tool will pair students by looking for **'pretest'** and **'posttest'** in the Assessment column, while strictly matching **Math** to Math and **Reading** to Reading.")
+st.markdown("Upload a single comprehensive CSV report. The tool will pair students by looking for **'pretest'** and **'posttest'** in the Assessment column, matching exact tests while displaying their enrolled class grade.")
 
 # --- Helper Functions ---
-def extract_grade(text):
+def extract_grade_str(text):
     if pd.isna(text):
         return "Unknown"
     match = re.search(r'(?:Grade\s*([Kk0-9])|([Kk0-9])(?:th|nd|rd|st)\s*Grade)', str(text), re.IGNORECASE)
@@ -32,6 +32,7 @@ def categorize_growth(val):
         return "High Positive (> 10%)"
 
 def style_growth_col(s):
+    # Styles numeric growth columns
     colors = []
     for val in s:
         if pd.isna(val):
@@ -44,6 +45,23 @@ def style_growth_col(s):
             colors.append('background-color: #ffffcc; color: #880;') # Yellow
         else:
             colors.append('background-color: #ccffcc; color: #080;') # Green
+    return colors
+
+def style_category_text(s):
+    # Styles text category columns
+    colors = []
+    for val in s:
+        val_str = str(val)
+        if "Negative" in val_str:
+            colors.append('background-color: #ffcccc; color: #900;')
+        elif "Zero" in val_str:
+            colors.append('background-color: #ffe5b4; color: #960;')
+        elif "Low Positive" in val_str:
+            colors.append('background-color: #ffffcc; color: #880;')
+        elif "High Positive" in val_str:
+            colors.append('background-color: #ccffcc; color: #080;')
+        else:
+            colors.append('')
     return colors
 
 def preprocess_single_file(df):
@@ -60,13 +78,6 @@ def preprocess_single_file(df):
         # Deduplicate to get one row per student per assessment
         df = df.drop_duplicates(subset=['Student Name', 'Assessment', 'Test Raw Score', 'Test Max Score']).copy()
         df['% Score'] = (df['Test Raw Score'] / df['Test Max Score']) * 100
-        df['ProgramInfo'] = df['Class'].astype(str) + " " + df['School'].astype(str)
-    else:
-        if 'Program' in df.columns:
-            df['ProgramInfo'] = df['Program']
-        else:
-            df['ProgramInfo'] = df['Class'].astype(str)
-            
     return df
 
 # --- File Uploader ---
@@ -86,30 +97,40 @@ if uploaded_file:
     if 'Assessment' not in df.columns:
         st.error("The uploaded file must contain an 'Assessment' column to identify pretests and posttests.")
     else:
-        # Subject detection logic with fallback
+        # 1. Subject detection logic with fallback
         def get_subject(row):
-            # 1. Check Assessment column first
             assessment_str = str(row.get('Assessment', '')).lower()
-            if 'math' in assessment_str:
-                return 'Math'
-            elif 'reading' in assessment_str or 'literacy' in assessment_str:
-                return 'Reading'
+            if 'math' in assessment_str: return 'Math'
+            if 'reading' in assessment_str or 'literacy' in assessment_str: return 'Reading'
             
-            # 2. Fallback to ProgramInfo (which holds Program or Class context)
-            program_str = str(row.get('ProgramInfo', '')).lower()
-            if 'math' in program_str:
-                return 'Math'
-            elif 'reading' in program_str or 'literacy' in program_str:
-                return 'Reading'
+            program_str = str(row.get('Program', '')).lower()
+            if 'math' in program_str: return 'Math'
+            if 'reading' in program_str or 'literacy' in program_str: return 'Reading'
             
+            class_str = str(row.get('Class', '')).lower()
+            if 'math' in class_str: return 'Math'
+            if 'reading' in class_str or 'literacy' in class_str: return 'Reading'
             return 'Other'
 
-        # Apply the smart subject detection to every row
         df['Subject'] = df.apply(get_subject, axis=1)
         
-        # Grade Level extraction (combines both strings to find grade numbers)
-        search_text = df['Assessment'].astype(str) + " " + df['ProgramInfo'].astype(str)
-        df['Grade Level'] = search_text.apply(extract_grade)
+        # 2. Advanced Grade Level Logic: Enrolled vs Assessment
+        def get_enrolled_grade(row):
+            # Prioritize Class -> Program -> Assessment
+            g = extract_grade_str(row.get('Class', ''))
+            if g != "Unknown": return g
+            g = extract_grade_str(row.get('Program', ''))
+            if g != "Unknown": return g
+            return extract_grade_str(row.get('Assessment', ''))
+
+        def get_assessment_grade(row):
+            # Prioritize Assessment -> Fallback to Enrolled
+            g = extract_grade_str(row.get('Assessment', ''))
+            if g != "Unknown": return g
+            return get_enrolled_grade(row)
+            
+        df['Enrolled Grade'] = df.apply(get_enrolled_grade, axis=1)
+        df['Assessment Grade'] = df.apply(get_assessment_grade, axis=1)
         
         # Find Pretests and Posttests using string matching
         pretest_mask = df['Assessment'].astype(str).str.contains('pretest', case=False, na=False)
@@ -128,20 +149,20 @@ if uploaded_file:
                 pre_df_raw = pre_df_raw.sort_values('Submit Date', na_position='first')
                 post_df_raw = post_df_raw.sort_values('Submit Date', na_position='first')
             
-            # Group by our core identifiers 
-            group_cols = ['Student Name', 'Teacher', 'School', 'Subject', 'Grade Level']
+            # Group by our core pairing identifiers (Matches precise test grade)
+            group_cols = ['Student Name', 'Teacher', 'School', 'Subject', 'Assessment Grade']
             
-            # Use the latest record for each student per subject
+            # Use the latest record for each student per subject and test level
             pre_df = pre_df_raw.groupby(group_cols).last().reset_index()
             post_df = post_df_raw.groupby(group_cols).last().reset_index()
             
             pre_df = pre_df.rename(columns={'% Score': '% Score_pre'})
-            post_df = post_df.rename(columns={'% Score': '% Score_post'})
+            post_df = post_df.rename(columns={'% Score': '% Score_post', 'Enrolled Grade': 'Grade Level'})
             
-            # Merge them together (inner join requires them to be in both datasets)
+            # Merge them together 
             merged_df = pd.merge(
                 pre_df[group_cols + ['% Score_pre']], 
-                post_df[group_cols + ['% Score_post']], 
+                post_df[group_cols + ['% Score_post', 'Grade Level']], 
                 on=group_cols
             )
             
@@ -163,7 +184,7 @@ if uploaded_file:
                 )
                 
                 grade_filter = st.sidebar.multiselect(
-                    "Select Grade Level", 
+                    "Select Enrolled Grade Level", 
                     options=sorted(merged_df['Grade Level'].unique()), 
                     default=sorted(merged_df['Grade Level'].unique())
                 )
@@ -218,7 +239,7 @@ if uploaded_file:
                 category_order = ["Negative (< 0%)", "Zero (0%)", "Low Positive (1-10%)", "High Positive (> 10%)"]
                 
                 # --- Navigation ---
-                view_option = st.radio("Select View:", ("By Student", "By Teacher", "By Grade Level", "By School"), horizontal=True)
+                view_option = st.radio("Select View:", ("By Student", "By Teacher", "By Grade Level", "By School", "Math Overview", "Reading Overview"), horizontal=True)
                 st.divider()
                 
                 # --- 1. View By Student ---
@@ -265,7 +286,7 @@ if uploaded_file:
 
                 # --- 3. View By Grade Level ---
                 elif view_option == "By Grade Level":
-                    st.subheader("Average Growth by Grade Level")
+                    st.subheader("Average Growth by Enrolled Grade Level")
                     
                     if not filtered_df.empty:
                         grade_agg = filtered_df.groupby(['Grade Level', 'Subject']).agg({
@@ -282,7 +303,7 @@ if uploaded_file:
                         fig = px.bar(grade_agg, x='Grade Level', y='Growth (%)', color='Growth Category', barmode='group',
                                      color_discrete_map=chart_color_map, 
                                      category_orders={"Growth Category": category_order},
-                                     title="Average Growth by Grade Level & Subject",
+                                     title="Average Growth by Enrolled Grade Level & Subject",
                                      hover_data=['Student Count'])
                         st.plotly_chart(fig, use_container_width=True)
                         
@@ -307,6 +328,35 @@ if uploaded_file:
                                      category_orders={"Growth Category": category_order},
                                      title="Average Growth by School",
                                      hover_data=['Student Count'])
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                # --- 5 & 6. Overview Dashboards (Math / Reading) ---
+                elif view_option in ["Math Overview", "Reading Overview"]:
+                    target_subject = "Math" if view_option == "Math Overview" else "Reading"
+                    st.subheader(f"{target_subject} Growth Category Overview")
+                    
+                    subj_df = filtered_df[filtered_df['Subject'] == target_subject]
+                    
+                    if subj_df.empty:
+                        st.info(f"No {target_subject} records found with the current filters.")
+                    else:
+                        # Count the number of students falling into each specific growth category
+                        cat_counts = subj_df['Growth Category'].value_counts().reindex(category_order, fill_value=0).reset_index()
+                        cat_counts.columns = ['Growth Category', 'Number of Students']
+                        
+                        # Display the data table with text-styling matching the colors
+                        styled_counts = cat_counts.style.apply(style_category_text, subset=['Growth Category'])
+                        st.dataframe(styled_counts, use_container_width=True)
+                        
+                        # Generate a bar chart focused on student counts, rather than percentages
+                        fig = px.bar(cat_counts, x='Growth Category', y='Number of Students', color='Growth Category',
+                                     color_discrete_map=chart_color_map,
+                                     category_orders={"Growth Category": category_order},
+                                     title=f"Total Number of Students per Growth Pillar ({target_subject})",
+                                     text='Number of Students')
+                        
+                        fig.update_traces(textposition='auto', textfont_size=16)
+                        fig.update_layout(showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
 
 else:

@@ -17,7 +17,9 @@ def extract_grade_str(text):
     text = str(text).lower()
     
     # 1. Explicitly check for Kindergarten variations
-    if 'kindergarten' in text or 'kinder' in text or 'grade k' in text or ' k ' in f" {text} ":
+    # \bk\b uses regex "word boundaries" to safely catch a standalone "K" or "k" 
+    # without accidentally triggering on words that just contain the letter k.
+    if 'kindergarten' in text or 'kinder' in text or 'grade k' in text or re.search(r'\bk\b', text):
         return "K"
         
     # 2. Check for spelled-out numbers paired with the word "grade"
@@ -34,7 +36,6 @@ def extract_grade_str(text):
     }
     
     for word, num in word_to_num.items():
-        # Matches "first grade", "grade one", etc.
         if re.search(rf'\b{word}\s+grade\b', text) or re.search(rf'\bgrade\s+{word}\b', text):
             return f"Grade {num}"
             
@@ -158,10 +159,15 @@ if uploaded_file:
             return extract_grade_str(row.get('Assessment', ''))
 
         def get_assessment_grade(row):
-            # Prioritize Assessment -> Fallback to Enrolled
+            # Prioritize Assessment -> Program -> Class
+            # This fixes the bug where "Pretest (Online)" fell back to the Class Grade (K)
+            # instead of falling back to the Program Grade (Grade 1), preventing it from 
+            # matching the Posttest correctly.
             g = extract_grade_str(row.get('Assessment', ''))
             if g != "Unknown": return g
-            return get_enrolled_grade(row)
+            g = extract_grade_str(row.get('Program', ''))
+            if g != "Unknown": return g
+            return extract_grade_str(row.get('Class', ''))
             
         df['Enrolled Grade'] = df.apply(get_enrolled_grade, axis=1)
         df['Assessment Grade'] = df.apply(get_assessment_grade, axis=1)
